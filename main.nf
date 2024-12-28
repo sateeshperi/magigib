@@ -3,7 +3,7 @@
 nextflow.enable.dsl = 2
 
 process TRIMMOMATIC {
-    container "biocontainers/trimmomatic:0.39--hdfd78af_2"
+    container 'community.wave.seqera.io/library/trimmomatic:0.39--a688969e471089d7'
 
     publishDir "${params.outdir}/trimmomatic/", mode: 'copy'
 
@@ -20,22 +20,17 @@ process TRIMMOMATIC {
 
     script:
     def args = task.ext.args ?: ''
-    def prefix = task.ext.prefix ?: "${meta.id}"
-    def trimmed = meta.single_end ? "SE" : "PE"
-    def output = meta.single_end ?
-        "${prefix}.SE.paired.trim.fastq.gz" // HACK to avoid unpaired and paired in the trimmed_reads output
-        : "${prefix}.paired.trim_1.fastq.gz ${prefix}.unpaired.trim_1.fastq.gz ${prefix}.paired.trim_2.fastq.gz ${prefix}.unpaired.trim_2.fastq.gz"
+    def prefix = reads[0].name.replace('_R1.fastq.gz', '')
     def qual_trim = task.ext.args2 ?: ''
     """
-    trimmomatic \\
-        $trimmed \\
+    trimmomatic PE \\
         -threads $task.cpus \\
+        $reads \\
+        ${prefix}.paired.trim_1.fastq.gz ${prefix}.unpaired.trim_1.fastq.gz ${prefix}.paired.trim_2.fastq.gz ${prefix}.unpaired.trim_2.fastq.gz \\
         -trimlog ${prefix}_trim.log \\
         -summary ${prefix}.summary \\
-        $reads \\
-        $output \\
-        $qual_trim \\
-        $args 2> >(tee ${prefix}_out.log >&2)
+        LEADING:30 TRAILING:30 SLIDINGWINDOW:4:20 MINLEN:35 \\
+        2> >(tee ${prefix}_out.log >&2)
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -45,7 +40,7 @@ process TRIMMOMATIC {
 }
 
 process METASPADES {
-    container "biocontainers/spades:4.0.0--h5fb382e_1"
+    container 'community.wave.seqera.io/library/spades:4.0.0--dc56d3b41f13769d'
 
     publishDir "${params.outdir}/metaspades/", mode: 'copy'
 
@@ -64,15 +59,14 @@ process METASPADES {
 
     script:
     def args = task.ext.args ?: ''
-    def prefix = task.ext.prefix ?: "${meta.id}"
+    def prefix = reads[0].name.replace('.paired.trim_1.fastq.gz', '')
     def maxmem = task.memory.toGiga()
-    def illumina_reads = illumina ? ( meta.single_end ? "-s $illumina" : "-1 ${illumina[0]} -2 ${illumina[1]}" ) : ""
+    def reads = "-1 ${reads[0]} -2 ${reads[1]}"
     """
     spades.py \\
-        $args \\
+        --meta \\
         --threads $task.cpus \\
         --memory $maxmem \\
-        $custom_hmms \\
         $reads \\
         -o ./
     mv spades.log ${prefix}.spades.log
@@ -111,8 +105,8 @@ process METASPADES {
 }
 
 workflow {
-    reads_ch    = Channel.fromPath(params.reads)
+    reads_ch = Channel.fromPath(params.reads)
 
-    TRIMMOMATIC(reads_ch)
+    TRIMMOMATIC(reads_ch.collect())
     METASPADES(TRIMMOMATIC.out.trimmed_reads)
 }
